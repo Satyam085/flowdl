@@ -927,9 +927,44 @@ body {
   color: var(--border-muted);
 }
 
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .footer-engine {
   font-size: 10px;
   color: var(--text-disabled);
+}
+
+.footer-credit-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  font-family: inherit;
+  transition: color 0.12s ease;
+}
+
+.footer-credit-btn:hover {
+  color: var(--text-primary);
+}
+
+.credit-author {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.footer-credit-btn:hover .credit-author {
+  color: var(--accent-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* Toasts */

@@ -69,6 +69,18 @@ window.addEventListener('DOMContentLoaded', () => {
   setupLedgerFilters();
   setupInputListeners();
 
+  const btnAuthorCreditEl = document.getElementById('btnAuthorCredit');
+  if (btnAuthorCreditEl) {
+    btnAuthorCreditEl.addEventListener('click', () => {
+      const url = 'https://github.com/Satyam085';
+      if (window.runtime && window.runtime.BrowserOpenURL) {
+        window.runtime.BrowserOpenURL(url);
+      } else {
+        window.open(url, '_blank');
+      }
+    });
+  }
+
   const wailsPoll = setInterval(async () => {
     if (window.go && window.go.main && window.go.main.App) {
       clearInterval(wailsPoll);

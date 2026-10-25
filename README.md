@@ -87,6 +87,12 @@ make dev
 
 ---
 
+## 👤 Author
+
+Crafted by **[Satyam Singh](https://github.com/Satyam085)**.
+
+---
+
 ## ⚖️ Licensing & Legal
 
 - **FlowDL** is released under the **[MIT License](LICENSE)**.
