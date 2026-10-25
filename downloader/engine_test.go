@@ -39,6 +39,62 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
+func TestFormatAndParseBytes(t *testing.T) {
+	b := 350.0 * 1024 * 1024
+	formatted := formatBytes(b)
+	if formatted != "350.00 MiB" {
+		t.Errorf("expected '350.00 MiB', got %q", formatted)
+	}
+
+	parsed := parseHumanBytes("350.00MiB")
+	if parsed != b {
+		t.Errorf("expected %f, got %f", b, parsed)
+	}
+
+	parsedG := parseHumanBytes("1.5GiB")
+	expectedG := 1.5 * 1024 * 1024 * 1024
+	if parsedG != expectedG {
+		t.Errorf("expected %f, got %f", expectedG, parsedG)
+	}
+}
+
+func TestParseOutputLineTitleAndTotal(t *testing.T) {
+	engine := NewEngine(nil)
+	task := &DownloadTask{
+		ID:    "test-1",
+		Title: "Fetching stream title...",
+		URL:   "https://www.youtube.com/watch?v=sample123",
+	}
+
+	// Line with title in info and NA total, but valid progress and downloaded bytes
+	line := "download-meta: 50.0%|4.20MiB/s|00:20|NA|350.00MiB|Never Gonna Give You Up|https://img.yt.com/123.jpg|367001600|NA"
+	engine.parseOutputLine(task, line)
+
+	if task.Title != "Never Gonna Give You Up" {
+		t.Errorf("expected Title to update to 'Never Gonna Give You Up', got %q", task.Title)
+	}
+	if task.Thumbnail != "https://img.yt.com/123.jpg" {
+		t.Errorf("expected Thumbnail to update, got %q", task.Thumbnail)
+	}
+	// TotalBytes should be estimated mathematically rather than showing NA
+	if task.TotalBytes != "~700.00 MiB" {
+		t.Errorf("expected TotalBytes to be '~700.00 MiB', got %q", task.TotalBytes)
+	}
+
+	// Line with destination filename fallback
+	task2 := &DownloadTask{
+		ID:    "test-2",
+		Title: "Fetching stream title...",
+		URL:   "https://www.youtube.com/watch?v=sample456",
+	}
+	destLine := `[download] Destination: /home/satyam/Downloads/Awesome Artist - Great Song.mp4`
+	engine.parseOutputLine(task2, destLine)
+
+	if task2.Title != "Awesome Artist - Great Song" {
+		t.Errorf("expected Title fallback from filename to be 'Awesome Artist - Great Song', got %q", task2.Title)
+	}
+}
+
 func TestEngineTaskLifecycle(t *testing.T) {
 	updated := false
 	engine := NewEngine(func(task *DownloadTask) {

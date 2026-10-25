@@ -97,10 +97,15 @@ func (e *Engine) CreateTask(opts DownloadOptions) (*DownloadTask, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	initialTitle := strings.TrimSpace(opts.Title)
+	if initialTitle == "" {
+		initialTitle = "Fetching stream title..."
+	}
+
 	task := &DownloadTask{
 		ID:          generateID(),
 		URL:         opts.URL,
-		Title:       opts.Title,
+		Title:       initialTitle,
 		SaveDir:     saveDir,
 		Quality:     quality,
 		FormatType:  formatType,
@@ -109,10 +114,6 @@ func (e *Engine) CreateTask(opts DownloadOptions) (*DownloadTask, error) {
 		Progress:    0,
 		Log:         "Waiting to start...",
 		CreatedAt:   time.Now(),
-	}
-
-	if task.Title == "" {
-		task.Title = opts.URL
 	}
 
 	e.tasks[task.ID] = task
@@ -273,8 +274,8 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 		args = append(args, "--js-runtimes", "node:"+e.nodePath)
 	}
 
-	// Structured progress template prefix
-	args = append(args, "--progress-template", "download-meta:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._total_bytes_estimate_str,progress._total_bytes_str)s|%(progress._downloaded_bytes_str)s")
+	// Structured progress template prefix with title, thumbnail, downloaded bytes, and total bytes
+	args = append(args, "--progress-template", "download-meta:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._total_bytes_str,progress._total_bytes_estimate_str,info.filesize_str,info.filesize_approx_str)s|%(progress._downloaded_bytes_str)s|%(info.title)s|%(info.thumbnail)s|%(progress.downloaded_bytes)s|%(progress.total_bytes,progress.total_bytes_estimate,info.filesize,info.filesize_approx)s")
 
 	args = append(args, task.URL)
 
@@ -373,6 +374,65 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 	e.notify(task)
 }
 
+func formatBytes(b float64) string {
+	const (
+		KiB = 1024.0
+		MiB = 1024.0 * KiB
+		GiB = 1024.0 * MiB
+		TiB = 1024.0 * GiB
+	)
+	switch {
+	case b >= TiB:
+		return fmt.Sprintf("%.2f TiB", b/TiB)
+	case b >= GiB:
+		return fmt.Sprintf("%.2f GiB", b/GiB)
+	case b >= MiB:
+		return fmt.Sprintf("%.2f MiB", b/MiB)
+	case b >= KiB:
+		return fmt.Sprintf("%.2f KiB", b/KiB)
+	default:
+		return fmt.Sprintf("%.0f B", b)
+	}
+}
+
+func parseHumanBytes(s string) float64 {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "~")
+	if s == "" || s == "NA" || s == "None" {
+		return 0
+	}
+
+	numStr := ""
+	unitStr := ""
+	for i, r := range s {
+		if (r >= '0' && r <= '9') || r == '.' {
+			numStr += string(r)
+		} else {
+			unitStr = strings.TrimSpace(s[i:])
+			break
+		}
+	}
+
+	val, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0
+	}
+
+	u := strings.ToUpper(unitStr)
+	switch {
+	case strings.HasPrefix(u, "T"):
+		return val * 1024 * 1024 * 1024 * 1024
+	case strings.HasPrefix(u, "G"):
+		return val * 1024 * 1024 * 1024
+	case strings.HasPrefix(u, "M"):
+		return val * 1024 * 1024
+	case strings.HasPrefix(u, "K"):
+		return val * 1024
+	default:
+		return val
+	}
+}
+
 func (e *Engine) parseOutputLine(task *DownloadTask, line string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -389,22 +449,80 @@ func (e *Engine) parseOutputLine(task *DownloadTask, line string) {
 			}
 			task.Speed = strings.TrimSpace(parts[1])
 			task.ETA = strings.TrimSpace(parts[2])
-			task.TotalBytes = strings.TrimSpace(parts[3])
 			task.DownloadedBytes = strings.TrimSpace(parts[4])
 			task.Status = "downloading"
 			task.Log = fmt.Sprintf("Downloading... %s (%s)", task.Speed, task.ETA)
+
+			// 1. Resolve human title from info dict if present
+			if len(parts) >= 6 {
+				titleFromInfo := strings.TrimSpace(parts[5])
+				if titleFromInfo != "" && titleFromInfo != "NA" && titleFromInfo != "None" {
+					task.Title = titleFromInfo
+				}
+			}
+
+			// 2. Resolve thumbnail from info dict
+			if len(parts) >= 7 {
+				thumbFromInfo := strings.TrimSpace(parts[6])
+				if thumbFromInfo != "" && thumbFromInfo != "NA" && thumbFromInfo != "None" && task.Thumbnail == "" {
+					task.Thumbnail = thumbFromInfo
+				}
+			}
+
+			// 3. Resolve TotalBytes and prevent "NA"
+			rawDownloadedStr := ""
+			if len(parts) >= 8 {
+				rawDownloadedStr = strings.TrimSpace(parts[7])
+			}
+			rawTotalStr := ""
+			if len(parts) >= 9 {
+				rawTotalStr = strings.TrimSpace(parts[8])
+			}
+
+			formattedTotal := strings.TrimSpace(parts[3])
+			if formattedTotal != "" && formattedTotal != "NA" && formattedTotal != "N/A" && formattedTotal != "None" {
+				task.TotalBytes = formattedTotal
+			} else if rawTotalStr != "" && rawTotalStr != "NA" && rawTotalStr != "N/A" && rawTotalStr != "None" {
+				if totVal, err := strconv.ParseFloat(rawTotalStr, 64); err == nil && totVal > 0 {
+					task.TotalBytes = formatBytes(totVal)
+				}
+			} else {
+				// Estimate total size mathematically from progress percentage and downloaded bytes
+				var dlBytes float64
+				if rawDownloadedStr != "" && rawDownloadedStr != "NA" && rawDownloadedStr != "None" {
+					dlBytes, _ = strconv.ParseFloat(rawDownloadedStr, 64)
+				}
+				if dlBytes == 0 && task.DownloadedBytes != "" {
+					dlBytes = parseHumanBytes(task.DownloadedBytes)
+				}
+
+				if task.Progress > 0.5 && dlBytes > 0 {
+					estTotal := dlBytes / (task.Progress / 100.0)
+					task.TotalBytes = "~" + formatBytes(estTotal)
+				} else {
+					task.TotalBytes = ""
+				}
+			}
 		}
 		e.notify(task)
 		return
 	}
 
-	// Capture Destination file
+	// Capture Destination file and title fallback
 	if m := destRegex.FindStringSubmatch(line); len(m) > 1 {
 		destPath := strings.TrimSpace(m[1])
 		if !filepath.IsAbs(destPath) {
 			destPath = filepath.Join(task.SaveDir, destPath)
 		}
 		task.OutputFile = destPath
+
+		// Extract base filename without extension as title fallback
+		base := filepath.Base(destPath)
+		ext := filepath.Ext(base)
+		fileTitle := strings.TrimSuffix(base, ext)
+		if fileTitle != "" && (task.Title == "" || task.Title == "Fetching stream title..." || strings.HasPrefix(task.Title, "http://") || strings.HasPrefix(task.Title, "https://")) {
+			task.Title = fileTitle
+		}
 	}
 
 	// Check post-processing steps

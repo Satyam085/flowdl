@@ -440,6 +440,31 @@ function renderLedger() {
   });
 }
 
+function resolveTitle(task) {
+  if (task.title && task.title !== 'Fetching stream title...' && !task.title.startsWith('http://') && !task.title.startsWith('https://')) {
+    return task.title;
+  }
+  if (task.outputFile) {
+    const parts = task.outputFile.split(/[/\\]/);
+    const filename = parts[parts.length - 1];
+    const clean = filename.replace(/\.[^/.]+$/, "");
+    if (clean) return clean;
+  }
+  return task.title || 'Fetching stream title...';
+}
+
+function resolveSizeMetrics(task) {
+  if (!task.downloadedBytes || task.downloadedBytes === 'NA' || task.downloadedBytes === 'None') {
+    return '';
+  }
+  const hasTotal = task.totalBytes && task.totalBytes !== 'NA' && task.totalBytes !== 'N/A' && task.totalBytes !== 'None';
+  if (hasTotal) {
+    return `${task.downloadedBytes} / ${task.totalBytes}`;
+  }
+  // Never append / NA
+  return `${task.downloadedBytes}`;
+}
+
 function renderLedgerRow(task) {
   let rowEl = queueListEl.querySelector(`.ledger-row[data-id="${task.id}"]`);
 
@@ -467,7 +492,8 @@ function renderLedgerRow(task) {
   const specText = isAudio ? task.audioFormat.toUpperCase() : task.quality.toUpperCase();
   const speedText = task.speed ? `${task.speed}` : '';
   const etaText = task.eta ? `ETA ${task.eta}` : '';
-  const sizeText = (task.downloadedBytes && task.totalBytes) ? `${task.downloadedBytes} / ${task.totalBytes}` : '';
+  const sizeText = resolveSizeMetrics(task);
+  const displayTitle = resolveTitle(task);
   const progressPct = Math.min(100, Math.max(0, task.progress || 0));
 
   rowEl.innerHTML = `
@@ -483,7 +509,7 @@ function renderLedgerRow(task) {
 
     <div class="row-main">
       <div class="row-top">
-        <span class="row-title" title="${escapeXml(task.title || task.url)}">${escapeXml(task.title || task.url)}</span>
+        <span class="row-title" title="${escapeXml(displayTitle)} • ${escapeXml(task.url || '')}">${escapeXml(displayTitle)}</span>
         <div class="row-tags">
           <span class="tag-spec">${specText}</span>
           <span class="tag-status ${task.status}">${task.status}</span>
