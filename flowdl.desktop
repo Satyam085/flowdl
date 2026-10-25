@@ -2,9 +2,11 @@
 Name=FlowDL
 GenericName=Video Downloader
 Comment=Minimal and elegant yt-dlp desktop studio
-Exec=flowdl
+Exec=flowdl %U
+TryExec=flowdl
 Icon=flowdl
 Terminal=false
 Type=Application
-Categories=AudioVideo;Video;Network;
+Categories=AudioVideo;Network;
 StartupNotify=true
+StartupWMClass=flowdl

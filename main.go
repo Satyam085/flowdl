@@ -2,6 +2,9 @@ package main
 
 import (
 	"embed"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -11,6 +14,30 @@ import (
 
 //go:embed all:frontend/src
 var assets embed.FS
+
+//go:embed build/appicon.png
+var appIcon []byte
+
+func init() {
+	// Ensure common binary locations are in PATH when launched from desktop environments
+	home, err := os.UserHomeDir()
+	if err == nil {
+		path := os.Getenv("PATH")
+		commonDirs := []string{
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, "bin"),
+			"/usr/local/bin",
+			"/usr/bin",
+			"/bin",
+		}
+		for _, dir := range commonDirs {
+			if !strings.Contains(path, dir) {
+				path = dir + string(os.PathListSeparator) + path
+			}
+		}
+		os.Setenv("PATH", path)
+	}
+}
 
 func main() {
 	app := NewApp()
@@ -30,8 +57,10 @@ func main() {
 			app,
 		},
 		Linux: &linux.Options{
+			Icon:                appIcon,
+			ProgramName:         "flowdl",
 			WindowIsTranslucent: false,
-			WebviewGpuPolicy:    linux.WebviewGpuPolicyAlways,
+			WebviewGpuPolicy:    linux.WebviewGpuPolicyOnDemand,
 		},
 	})
 

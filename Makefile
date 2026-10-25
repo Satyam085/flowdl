@@ -33,11 +33,15 @@ install: build
 	chmod +x $(HOME)/.local/bin/flowdl
 	@echo "Installing desktop launcher and icons..."
 	mkdir -p $(HOME)/.local/share/applications
-	cp flowdl.desktop $(HOME)/.local/share/applications/
+	sed -e 's|^Exec=.*|Exec=$(HOME)/.local/bin/flowdl %U|' \
+	    -e 's|^TryExec=.*|TryExec=$(HOME)/.local/bin/flowdl|' \
+	    flowdl.desktop > $(HOME)/.local/share/applications/flowdl.desktop
+	chmod +x $(HOME)/.local/share/applications/flowdl.desktop
 	mkdir -p $(HOME)/.local/share/icons/hicolor/512x512/apps
 	mkdir -p $(HOME)/.local/share/icons/hicolor/256x256/apps
 	mkdir -p $(HOME)/.local/share/pixmaps
 	cp build/appicon.png $(HOME)/.local/share/icons/hicolor/512x512/apps/flowdl.png
 	cp build/flowdl.png $(HOME)/.local/share/icons/hicolor/256x256/apps/flowdl.png
 	cp build/appicon.png $(HOME)/.local/share/pixmaps/flowdl.png
+	update-desktop-database $(HOME)/.local/share/applications 2>/dev/null || true
 	@echo "Installation complete! You can run 'flowdl' from your terminal or desktop menu."
