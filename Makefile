@@ -1,4 +1,4 @@
-.PHONY: all build dev test clean install
+.PHONY: all build dev test clean install appimage
 
 WAILS ?= /home/satyam/go/bin/wails
 TAGS ?= webkit2_41
@@ -9,6 +9,10 @@ all: build
 build:
 	@echo "Building FlowDL with tags: $(TAGS)..."
 	$(WAILS) build -tags $(TAGS)
+
+appimage: build
+	@echo "Packaging AppImage..."
+	./scripts/build-appimage.sh
 
 dev:
 	@echo "Running FlowDL in development mode..."

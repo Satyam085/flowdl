@@ -1,0 +1,151 @@
+name: Build and Release FlowDL
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Binaries
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Portable Windows Executable
+        run: |
+          wails build -platform windows/amd64
+          Move-Item -Path build/bin/flowdl.exe -Destination build/bin/FlowDL-Windows-x64-Portable.exe
+
+      - name: Build Windows Installer (NSIS)
+        run: |
+          wails build -platform windows/amd64 -nsis
+          Get-ChildItem build/bin/*installer*.exe | Rename-Item -NewName "FlowDL-Windows-x64-Setup.exe"
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            build/bin/FlowDL-Windows-x64-Portable.exe
+            build/bin/FlowDL-Windows-x64-Setup.exe
+
+  build-linux:
+    name: Build Linux Binaries & AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev wget file
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Native Linux Binary
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          wails build -tags webkit2_41
+          cd build/bin
+          tar -czvf FlowDL-Linux-x86_64.tar.gz flowdl
+          cd ../..
+
+      - name: Package AppImage
+        run: |
+          # Download appimagetool
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          sed -i 's|AI\x02|\x00\x00\x00|' appimagetool || true # allow running in docker/actions without FUSE
+          ./appimagetool --appimage-extract
+          
+          # Prepare AppDir
+          mkdir -p build/AppDir/usr/bin
+          mkdir -p build/AppDir/usr/share/applications
+          mkdir -p build/AppDir/usr/share/icons/hicolor/256x256/apps
+          
+          cp build/bin/flowdl build/AppDir/usr/bin/flowdl
+          cp flowdl.desktop build/AppDir/flowdl.desktop
+          cp flowdl.desktop build/AppDir/usr/share/applications/flowdl.desktop
+          cp build/appicon.png build/AppDir/flowdl.png
+          cp build/appicon.png build/AppDir/usr/share/icons/hicolor/256x256/apps/flowdl.png
+          
+          cat << 'EOF' > build/AppDir/AppRun
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          exec "${HERE}/usr/bin/flowdl" "$@"
+          EOF
+          chmod +x build/AppDir/AppRun
+          
+          ./squashfs-root/AppRun build/AppDir build/bin/FlowDL-Linux-x86_64.AppImage
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            build/bin/FlowDL-Linux-x86_64.tar.gz
+            build/bin/FlowDL-Linux-x86_64.AppImage
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-binaries
+          path: release-assets
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: release-assets
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

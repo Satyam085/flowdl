@@ -1,0 +1,49 @@
+app-id: org.flowdl.FlowDL
+runtime: org.gnome.Platform
+runtime-version: '46'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+
+command: flowdl
+
+finish-args:
+  # Network access for streaming & downloads
+  - --share=network
+  - --share=ipc
+  # GUI display
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # File system access to save media
+  - --filesystem=xdg-download
+  - --filesystem=home:ro
+  # Audio playback
+  - --socket=pulseaudio
+
+build-options:
+  append-path: /usr/lib/sdk/golang/bin
+  env:
+    GOROOT: /usr/lib/sdk/golang
+
+modules:
+  - name: yt-dlp
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 yt-dlp /app/bin/yt-dlp
+    sources:
+      - type: file
+        url: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+        sha256: skip
+
+  - name: flowdl
+    buildsystem: simple
+    build-commands:
+      - go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+      - wails build -tags webkit2_41
+      - install -Dm755 build/bin/flowdl /app/bin/flowdl
+      - install -Dm644 flowdl.desktop /app/share/applications/org.flowdl.FlowDL.desktop
+      - install -Dm644 build/appicon.png /app/share/icons/hicolor/256x256/apps/org.flowdl.FlowDL.png
+    sources:
+      - type: dir
+        path: ../../
