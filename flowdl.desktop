@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=FlowDL
+GenericName=Video Downloader
+Comment=Minimal and elegant yt-dlp desktop studio
+Exec=flowdl
+Icon=video-x-generic
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Network;
+StartupNotify=true

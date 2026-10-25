@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FlowDL — Elegant yt-dlp Studio</title>
+  <link rel="stylesheet" href="./main.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>FlowDL</h1>
+          <span class="brand-tag">yt-dlp studio</span>
+        </div>
+      </div>
+
+      <div class="header-center">
+        <div class="location-picker" title="Current save location">
+          <div class="loc-icon">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+          </div>
+          <span class="save-path-text" id="currentSavePath">Loading...</span>
+          <button class="btn-sm btn-ghost" id="btnChangeDir" title="Change folder">Change</button>
+          <button class="btn-sm btn-ghost" id="btnOpenFolder" title="Open folder in File Manager">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="dependency-status" id="depStatus">
+          <span class="badge badge-subtle" id="ytdlpBadge">yt-dlp checking...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="app-body">
+      <!-- Input Card -->
+      <section class="card input-card">
+        <div class="card-header">
+          <div class="tabs-nav">
+            <button class="tab-btn active" id="tabSingle">Single Video</button>
+            <button class="tab-btn" id="tabBatch">Batch Links</button>
+          </div>
+          <div class="header-action">
+            <button class="btn-xs btn-subtle" id="btnPasteClip">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.483-.04 1.05-.07 1.774-.07s1.291.03 1.774.07c1.131.094 1.976 1.057 1.976 2.192V7.5M8.25 7.5h7.5m-7.5 0H6a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 006 22.5h12a2.25 2.25 0 002.25-2.25V9.75A2.25 2.25 0 0018 7.5h-2.25" />
+              </svg>
+              Paste from Clipboard
+            </button>
+          </div>
+        </div>
+
+        <div class="input-form">
+          <!-- Single URL Input -->
+          <div class="input-group" id="singleUrlGroup">
+            <div class="input-wrapper">
+              <input type="text" id="urlInput" placeholder="Paste video URL (YouTube, Vimeo, Twitter/X, TikTok, Soundcloud...)" autocomplete="off" spellcheck="false" />
+              <button class="btn-icon" id="btnClearUrl" title="Clear input" style="display:none;">✕</button>
+            </div>
+            <button class="btn btn-secondary" id="btnInspect">
+              <span class="btn-spinner" id="inspectSpinner" style="display:none;"></span>
+              <span id="inspectBtnText">Inspect</span>
+            </button>
+          </div>
+
+          <!-- Batch URL Input -->
+          <div class="input-group-batch" id="batchUrlGroup" style="display:none;">
+            <textarea id="batchUrlsInput" placeholder="Paste multiple links (one per line)..." rows="4" spellcheck="false"></textarea>
+            <div class="batch-hint">Separate links with new lines or commas. Each will be queued with the options below.</div>
+          </div>
+
+          <!-- Video Preview Card (Shows when metadata fetched) -->
+          <div class="preview-card" id="mediaPreview" style="display:none;">
+            <div class="preview-thumb-wrap">
+              <img id="previewThumb" src="" alt="Thumbnail" />
+              <span class="preview-duration" id="previewDuration">00:00</span>
+            </div>
+            <div class="preview-details">
+              <h3 class="preview-title" id="previewTitle">Video Title</h3>
+              <p class="preview-uploader" id="previewUploader">Channel Name</p>
+              <div class="preview-meta-tags" id="previewResolutions"></div>
+            </div>
+          </div>
+
+          <!-- Download Options Grid -->
+          <div class="options-container">
+            <!-- Format selector row -->
+            <div class="option-row">
+              <label class="option-label">Download Type</label>
+              <div class="segmented-control" id="formatTypeControl">
+                <button class="seg-btn active" data-type="video">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                  </svg>
+                  Video (MP4)
+                </button>
+                <button class="seg-btn" data-type="audio">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                  </svg>
+                  Audio Only
+                </button>
+              </div>
+            </div>
+
+            <!-- Video Quality selector -->
+            <div class="option-row" id="videoQualityRow">
+              <label class="option-label">Resolution</label>
+              <div class="chips-group" id="videoQualityChips">
+                <button class="chip active" data-quality="best">Best Quality</button>
+                <button class="chip" data-quality="2160p">4K (2160p)</button>
+                <button class="chip" data-quality="1440p">2K (1440p)</button>
+                <button class="chip" data-quality="1080p">1080p HD</button>
+                <button class="chip" data-quality="720p">720p HD</button>
+                <button class="chip" data-quality="480p">480p</button>
+              </div>
+            </div>
+
+            <!-- Audio Format selector -->
+            <div class="option-row" id="audioFormatRow" style="display:none;">
+              <label class="option-label">Audio Format</label>
+              <div class="chips-group" id="audioFormatChips">
+                <button class="chip active" data-audio="mp3">MP3 (320kbps)</button>
+                <button class="chip" data-audio="m4a">M4A (AAC)</button>
+                <button class="chip" data-audio="flac">FLAC (Lossless)</button>
+                <button class="chip" data-audio="opus">OPUS</button>
+                <button class="chip" data-audio="wav">WAV</button>
+              </div>
+            </div>
+
+            <!-- Toggles Row -->
+            <div class="option-row toggles-row">
+              <label class="toggle-control">
+                <input type="checkbox" id="chkEmbedSubs" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Embed Subtitles</span>
+              </label>
+
+              <label class="toggle-control">
+                <input type="checkbox" id="chkEmbedThumb" checked />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Embed Thumbnail / Art</span>
+              </label>
+
+              <label class="toggle-control">
+                <input type="checkbox" id="chkEmbedMeta" checked />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Metadata & Chapters</span>
+              </label>
+
+              <label class="toggle-control">
+                <input type="checkbox" id="chkPlaylist" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Download Full Playlist</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Action Footer -->
+          <div class="input-actions">
+            <button class="btn btn-primary btn-large" id="btnDownload">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+              <span id="btnDownloadText">Start Download</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Downloads Queue Section -->
+      <section class="card queue-card">
+        <div class="queue-header">
+          <div class="queue-title-wrap">
+            <h2>Downloads & Queue</h2>
+            <div class="queue-filters">
+              <button class="filter-btn active" data-filter="all">All (<span id="countAll">0</span>)</button>
+              <button class="filter-btn" data-filter="active">Active (<span id="countActive">0</span>)</button>
+              <button class="filter-btn" data-filter="completed">Completed (<span id="countCompleted">0</span>)</button>
+            </div>
+          </div>
+
+          <div class="queue-actions">
+            <button class="btn-xs btn-subtle" id="btnClearFinished" title="Clear completed and failed tasks">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+              </svg>
+              Clear Finished
+            </button>
+          </div>
+        </div>
+
+        <!-- Task List Container -->
+        <div class="queue-list" id="queueList">
+          <!-- Empty State -->
+          <div class="empty-state" id="emptyState">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25-2.25M12 13.875V3.75M3.75 7.5h16.5" />
+              </svg>
+            </div>
+            <h3>No downloads yet</h3>
+            <p>Paste a video or playlist link above to start downloading with yt-dlp</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Floating Toast Notification -->
+    <div class="toast-container" id="toastContainer"></div>
+  </div>
+
+  <script src="./main.js"></script>
+</body>
+</html>

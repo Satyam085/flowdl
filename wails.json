@@ -1,0 +1,9 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "flowdl",
+  "outputfilename": "flowdl",
+  "wailsjsdir": "./frontend",
+  "author": {
+    "name": "Satyam Singh"
+  }
+}
