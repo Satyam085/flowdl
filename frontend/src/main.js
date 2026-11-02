@@ -8,8 +8,11 @@ let appState = {
   audioFormat: 'mp3',
   tasks: {}, // id -> task
   activeFilter: 'all', // 'all', 'active', 'completed'
-  inspectedInfo: null
+  inspectedInfo: null,
+  autoPlaylist: false // Playlist box was ticked by inspection, not the user
 };
+
+const ACTIVE_STATUSES = ['downloading', 'processing', 'queued'];
 
 // DOM References
 const depDotEl = document.getElementById('depDot');
@@ -91,19 +94,20 @@ window.addEventListener('DOMContentLoaded', () => {
 
 async function initSystem() {
   try {
-    // 1. Initial Directory
-    const dir = await window.go.main.App.GetDefaultSaveDir();
-    setDirectory(dir);
+    // 1. Saved preferences and directory
+    const prefs = await loadPrefs();
+    applyPrefs(prefs);
+    setDirectory((typeof prefs.saveDir === 'string' && prefs.saveDir) || await window.go.main.App.GetDefaultSaveDir());
 
     // 2. Telemetry
     const dep = await window.go.main.App.GetDependencyStatus();
-    if (dep.ytDlpInstalled) {
-      depDotEl.className = 'telemetry-dot ready';
-      depTextEl.textContent = `yt-dlp ${dep.ytDlpVersion || 'ready'} • ffmpeg OK`;
-    } else {
-      depDotEl.className = 'telemetry-dot error';
-      depTextEl.textContent = 'yt-dlp not found in PATH';
+    const ytdlp = dep.ytDlpInstalled ? `yt-dlp ${dep.ytDlpVersion || 'ready'}` : 'yt-dlp missing';
+    depTextEl.textContent = `${ytdlp} • ffmpeg ${dep.ffmpegInstalled ? 'OK' : 'missing'}`;
+    depDotEl.className = `telemetry-dot ${!dep.ytDlpInstalled ? 'error' : dep.ffmpegInstalled ? 'ready' : 'warn'}`;
+    if (!dep.ytDlpInstalled) {
       showNotice('yt-dlp executable missing from PATH', 'error');
+    } else if (!dep.ffmpegInstalled) {
+      showNotice('ffmpeg not found: merging, audio extraction and embedding will fail', 'error');
     }
 
     // 3. Queue state
@@ -132,12 +136,44 @@ function setDirectory(dir) {
   currentSavePathEl.title = dir || '';
 }
 
+// Preferences live in a Go-side config file (survives restarts on every platform)
+async function loadPrefs() {
+  try {
+    return JSON.parse(await window.go.main.App.LoadPrefs()) || {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs() {
+  const prefs = {
+    saveDir: appState.saveDir,
+    formatType: appState.formatType,
+    quality: appState.quality,
+    audioFormat: appState.audioFormat,
+    embedSubs: chkEmbedSubsEl.checked,
+    embedThumbnail: chkEmbedThumbEl.checked,
+    embedMetadata: chkEmbedMetaEl.checked
+  };
+  window.go?.main?.App?.SavePrefs(JSON.stringify(prefs)).catch(() => {});
+}
+
+function applyPrefs(prefs) {
+  if (prefs.formatType === 'video' || prefs.formatType === 'audio') selectFormatType(prefs.formatType);
+  if ([...videoQualityChips].some(p => p.dataset.quality === prefs.quality)) selectQuality(prefs.quality);
+  if ([...audioFormatChips].some(p => p.dataset.audio === prefs.audioFormat)) selectAudioFormat(prefs.audioFormat);
+  if (typeof prefs.embedSubs === 'boolean') chkEmbedSubsEl.checked = prefs.embedSubs;
+  if (typeof prefs.embedThumbnail === 'boolean') chkEmbedThumbEl.checked = prefs.embedThumbnail;
+  if (typeof prefs.embedMetadata === 'boolean') chkEmbedMetaEl.checked = prefs.embedMetadata;
+}
+
 // Directory chooser
 btnChangeDirEl.addEventListener('click', async () => {
   try {
     const chosen = await window.go.main.App.SelectDirectory(appState.saveDir);
     if (chosen) {
       setDirectory(chosen);
+      savePrefs();
       showNotice(`Output path: ${chosen}`, 'success');
     }
   } catch (err) {
@@ -161,7 +197,7 @@ function setupModeToggle() {
       tabModeLabelEl.textContent = 'Single';
       singleWrapEl.style.display = 'none';
       batchWrapEl.style.display = 'block';
-      mediaPreviewEl.style.display = 'none';
+      clearInspection();
       updateBatchMetrics();
       batchUrlsInputEl.focus();
     } else {
@@ -178,13 +214,20 @@ function setupModeToggle() {
 function setupInputListeners() {
   urlInputEl.addEventListener('input', () => {
     btnClearUrlEl.style.display = urlInputEl.value.trim() ? 'block' : 'none';
+    clearInspection(); // the preview no longer matches the URL
+  });
+
+  // Inspect right after a paste into the field (Ctrl+V or context menu)
+  urlInputEl.addEventListener('paste', () => {
+    setTimeout(() => {
+      if (/^https?:\/\//.test(urlInputEl.value.trim())) inspectTarget();
+    });
   });
 
   btnClearUrlEl.addEventListener('click', () => {
     urlInputEl.value = '';
     btnClearUrlEl.style.display = 'none';
-    mediaPreviewEl.style.display = 'none';
-    appState.inspectedInfo = null;
+    clearInspection();
     urlInputEl.focus();
   });
 
@@ -197,6 +240,7 @@ function setupInputListeners() {
       if (appState.mode === 'single') {
         urlInputEl.value = text.trim();
         btnClearUrlEl.style.display = 'block';
+        clearInspection();
         inspectTarget();
       } else {
         const cur = batchUrlsInputEl.value;
@@ -212,11 +256,34 @@ function setupInputListeners() {
 
   urlInputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      if (appState.inspectedInfo) {
+      if (freshInspection()) {
         dispatchDownload();
       } else {
         inspectTarget();
       }
+    } else if (e.key === 'Escape' && urlInputEl.value) {
+      btnClearUrlEl.click();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    const field = appState.mode === 'single' ? urlInputEl : batchUrlsInputEl;
+
+    if (mod && key === 'l') {
+      e.preventDefault();
+      field.focus();
+      field.select();
+    } else if (mod && key === 'v' && !e.target.closest('input[type="text"], textarea')) {
+      // Move focus before the native paste lands, so it goes into the URL field
+      if (field === urlInputEl) {
+        field.select();
+      } else {
+        if (field.value && !field.value.endsWith('\n')) field.value += '\n';
+        field.setSelectionRange(field.value.length, field.value.length);
+      }
+      field.focus();
     }
   });
 }
@@ -236,6 +303,8 @@ function parseBatchUrls() {
 }
 
 // Media Specs Inspection
+let inspectSeq = 0; // only the latest inspection may update the UI
+
 async function inspectTarget() {
   const url = urlInputEl.value.trim();
   if (!url) {
@@ -243,73 +312,105 @@ async function inspectTarget() {
     return;
   }
 
+  const seq = ++inspectSeq;
   inspectSpinnerEl.style.display = 'inline-block';
   inspectBtnTextEl.textContent = 'Inspecting';
   btnInspectEl.disabled = true;
 
   try {
-    const info = await window.go.main.App.FetchInfo(url);
+    const info = await window.go.main.App.FetchInfo(url, chkPlaylistEl.checked);
+    if (seq !== inspectSeq || urlInputEl.value.trim() !== url) return;
     appState.inspectedInfo = info;
     displayInspection(info);
   } catch (err) {
-    showNotice(err.message || 'Inspection failed', 'error');
+    if (seq === inspectSeq) showNotice(err.message || 'Inspection failed', 'error');
   } finally {
-    inspectSpinnerEl.style.display = 'none';
-    inspectBtnTextEl.textContent = 'Inspect';
-    btnInspectEl.disabled = false;
+    if (seq === inspectSeq) {
+      inspectSpinnerEl.style.display = 'none';
+      inspectBtnTextEl.textContent = 'Inspect';
+      btnInspectEl.disabled = false;
+    }
+  }
+}
+
+// Inspection result, only if it still matches the URL in the field
+function freshInspection() {
+  const info = appState.inspectedInfo;
+  return info && info.url === urlInputEl.value.trim() ? info : null;
+}
+
+function clearInspection() {
+  appState.inspectedInfo = null;
+  mediaPreviewEl.style.display = 'none';
+  setQualityLimit(0);
+  if (appState.autoPlaylist) {
+    chkPlaylistEl.checked = false;
+    appState.autoPlaylist = false;
   }
 }
 
 function displayInspection(info) {
-  if (!info) {
-    mediaPreviewEl.style.display = 'none';
-    return;
-  }
-
   mediaPreviewEl.style.display = 'flex';
   previewThumbEl.src = info.thumbnail || '';
+  previewThumbEl.style.visibility = info.thumbnail ? 'visible' : 'hidden';
   previewDurationEl.textContent = info.durationStr || '--:--';
   previewTitleEl.textContent = info.title || 'Untitled';
-  previewUploaderEl.textContent = info.uploader || (info.isPlaylist ? `Playlist (${info.playlistCount} items)` : 'Stream');
+  previewUploaderEl.textContent = info.uploader || (info.isPlaylist ? 'Playlist' : 'Stream');
 
-  const resList = Array.isArray(info.availableResolutions) ? info.availableResolutions.slice(0, 4).join(', ') : 'Direct stream';
-  previewMetaTagsEl.textContent = resList;
+  const resolutions = info.availableResolutions || [];
+  if (info.isPlaylist) {
+    previewMetaTagsEl.textContent = `${info.playlistCount} items`;
+  } else {
+    previewMetaTagsEl.textContent = resolutions.length ? resolutions.slice(0, 4).join(', ') : 'Direct stream';
+  }
+
+  if (info.isPlaylist && !chkPlaylistEl.checked) {
+    chkPlaylistEl.checked = true;
+    appState.autoPlaylist = true;
+  }
+  setQualityLimit(Math.max(0, ...resolutions.map(r => parseInt(r, 10) || 0)));
+}
+
+// Disable quality caps above what the source offers (0 = unknown, enable all)
+function setQualityLimit(maxHeight) {
+  videoQualityChips.forEach(pill => {
+    pill.disabled = maxHeight > 0 && parseInt(pill.dataset.quality, 10) > maxHeight;
+  });
 }
 
 // Format & Preset Controls
+function selectFormatType(type) {
+  formatTypeBtns.forEach(b => b.classList.toggle('active', b.dataset.type === type));
+  appState.formatType = type;
+  videoQualityRowEl.style.display = type === 'video' ? 'flex' : 'none';
+  audioFormatRowEl.style.display = type === 'audio' ? 'flex' : 'none';
+}
+
+function selectQuality(quality) {
+  videoQualityChips.forEach(p => p.classList.toggle('active', p.dataset.quality === quality));
+  appState.quality = quality;
+}
+
+function selectAudioFormat(format) {
+  audioFormatChips.forEach(p => p.classList.toggle('active', p.dataset.audio === format));
+  appState.audioFormat = format;
+}
+
 function setupFormatOptions() {
-  formatTypeBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      formatTypeBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const t = btn.getAttribute('data-type');
-      appState.formatType = t;
-
-      if (t === 'video') {
-        videoQualityRowEl.style.display = 'flex';
-        audioFormatRowEl.style.display = 'none';
-      } else {
-        videoQualityRowEl.style.display = 'none';
-        audioFormatRowEl.style.display = 'flex';
-      }
-    });
-  });
-
-  videoQualityChips.forEach(pill => {
-    pill.addEventListener('click', () => {
-      videoQualityChips.forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      appState.quality = pill.getAttribute('data-quality');
-    });
-  });
-
-  audioFormatChips.forEach(pill => {
-    pill.addEventListener('click', () => {
-      audioFormatChips.forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      appState.audioFormat = pill.getAttribute('data-audio');
-    });
-  });
+  formatTypeBtns.forEach(btn => btn.addEventListener('click', () => {
+    selectFormatType(btn.dataset.type);
+    savePrefs();
+  }));
+  videoQualityChips.forEach(pill => pill.addEventListener('click', () => {
+    selectQuality(pill.dataset.quality);
+    savePrefs();
+  }));
+  audioFormatChips.forEach(pill => pill.addEventListener('click', () => {
+    selectAudioFormat(pill.dataset.audio);
+    savePrefs();
+  }));
+  [chkEmbedSubsEl, chkEmbedThumbEl, chkEmbedMetaEl].forEach(chk => chk.addEventListener('change', savePrefs));
+  chkPlaylistEl.addEventListener('change', () => { appState.autoPlaylist = false; });
 }
 
 // Download Dispatcher
@@ -335,8 +436,11 @@ async function dispatchDownload() {
     }
 
     options.url = url;
-    if (appState.inspectedInfo && appState.inspectedInfo.title) {
-      options.title = appState.inspectedInfo.title;
+    const info = freshInspection();
+    if (info) {
+      options.title = info.title || '';
+      // The cached extraction is a single video, so it can't serve a playlist download
+      if (!options.downloadPlaylist) options.infoJsonPath = info.infoJsonPath || '';
     }
 
     try {
@@ -348,8 +452,7 @@ async function dispatchDownload() {
       // Reset input
       urlInputEl.value = '';
       btnClearUrlEl.style.display = 'none';
-      mediaPreviewEl.style.display = 'none';
-      appState.inspectedInfo = null;
+      clearInspection();
     } catch (err) {
       showNotice(err.message || 'Dispatch error', 'error');
     }
@@ -405,7 +508,7 @@ function setupLedgerFilters() {
 
 function updateTelemetry() {
   const all = Object.values(appState.tasks);
-  const active = all.filter(t => t.status === 'downloading' || t.status === 'processing' || t.status === 'queued');
+  const active = all.filter(t => ACTIVE_STATUSES.includes(t.status));
   const completed = all.filter(t => t.status === 'completed');
 
   countAllEl.textContent = all.length;
@@ -414,42 +517,44 @@ function updateTelemetry() {
 
   footerActiveCountEl.textContent = `${active.length} active transfer${active.length === 1 ? '' : 's'}`;
 
-  // Find dominant speed among active
-  const speeds = active.map(t => t.speed).filter(Boolean);
-  footerSpeedEl.textContent = speeds.length > 0 ? speeds[0] : 'Idle';
+  const totalSpeed = active
+    .filter(t => t.status === 'downloading')
+    .reduce((sum, t) => sum + (t.speedBytes || 0), 0);
+  footerSpeedEl.textContent = totalSpeed > 0 ? formatRate(totalSpeed) : 'Idle';
 }
 
-function getVisibleTasks() {
-  const all = Object.values(appState.tasks).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  if (appState.activeFilter === 'active') {
-    return all.filter(t => t.status === 'downloading' || t.status === 'processing' || t.status === 'queued');
+function formatRate(bytesPerSec) {
+  const units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s'];
+  let i = 0;
+  while (bytesPerSec >= 1024 && i < units.length - 1) {
+    bytesPerSec /= 1024;
+    i++;
   }
-  if (appState.activeFilter === 'completed') {
-    return all.filter(t => t.status === 'completed');
-  }
-  return all;
+  return `${bytesPerSec.toFixed(i ? 2 : 0)} ${units[i]}`;
+}
+
+function matchesFilter(task) {
+  if (appState.activeFilter === 'active') return ACTIVE_STATUSES.includes(task.status);
+  if (appState.activeFilter === 'completed') return task.status === 'completed';
+  return true;
 }
 
 function renderLedger() {
   updateTelemetry();
-  const tasks = getVisibleTasks();
 
-  if (tasks.length === 0) {
-    emptyStateEl.style.display = 'flex';
-    const rows = queueListEl.querySelectorAll('.ledger-row');
-    rows.forEach(r => r.remove());
-    return;
-  }
-
-  emptyStateEl.style.display = 'none';
-  tasks.forEach(t => renderLedgerRow(t));
-
-  // Purge removed
-  const existingRows = queueListEl.querySelectorAll('.ledger-row');
-  existingRows.forEach(r => {
-    const id = r.getAttribute('data-id');
-    if (!appState.tasks[id]) r.remove();
+  queueListEl.querySelectorAll('.ledger-row').forEach(r => {
+    if (!appState.tasks[r.dataset.id]) r.remove();
   });
+
+  // Newest first: appendChild moves existing rows into sorted order
+  Object.values(appState.tasks)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .forEach(t => {
+      const rowEl = renderLedgerRow(t);
+      if (rowEl) queueListEl.appendChild(rowEl);
+    });
+
+  syncEmptyState();
 }
 
 function resolveTitle(task) {
@@ -477,147 +582,194 @@ function resolveSizeMetrics(task) {
   return `${task.downloadedBytes}`;
 }
 
+const ICONS = {
+  video: '<polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>',
+  audio: '<path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />',
+  cancel: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
+  play: '<polygon points="5 3 19 12 5 21 5 3"></polygon>',
+  reveal: '<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />',
+  retry: '<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />',
+  dismiss: '<polyline points="3 6 5 6 21 6"></polyline><path stroke-linecap="round" stroke-linejoin="round" d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>'
+};
+
+const svg = (body, size = 13, stroke = 1.75) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${stroke}">${body}</svg>`;
+
+// action -> [extra class, tooltip, stroke width]
+const ACTION_BUTTONS = {
+  cancel: ['danger', 'Cancel Transfer', 2],
+  play: ['success', 'Play Media File', 2],
+  reveal: ['', 'Reveal in File Manager', 1.75],
+  retry: ['', 'Retry Download', 1.75],
+  dismiss: ['', 'Dismiss from ledger', 1.75]
+};
+
+const ACTIONS_BY_STATUS = {
+  queued: ['cancel'],
+  downloading: ['cancel'],
+  processing: ['cancel'],
+  completed: ['play', 'reveal', 'dismiss'],
+  error: ['retry', 'dismiss'],
+  cancelled: ['retry', 'dismiss']
+};
+
+function actionButtons(status) {
+  return (ACTIONS_BY_STATUS[status] || []).map(action => {
+    const [cls, title, stroke] = ACTION_BUTTONS[action];
+    return `<button class="btn-row-action ${cls}" data-action="${action}" title="${title}">${svg(ICONS[action], 13, stroke)}</button>`;
+  }).join('');
+}
+
+function createRow(task) {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'ledger-row';
+  rowEl.dataset.id = task.id;
+  rowEl.innerHTML = `
+    <div class="row-thumb">
+      <div class="row-thumb-icon">${svg(task.formatType === 'audio' ? ICONS.audio : ICONS.video, 16)}</div>
+    </div>
+    <div class="row-main">
+      <div class="row-top">
+        <span class="row-title"></span>
+        <div class="row-tags">
+          <span class="tag-spec"></span>
+          <span class="tag-status"></span>
+        </div>
+      </div>
+      <div class="row-progress"><div class="row-progress-bar"></div></div>
+      <div class="row-bottom">
+        <span class="row-log"></span>
+        <div class="row-metrics"></div>
+      </div>
+    </div>
+    <div class="row-actions"></div>
+  `;
+  return rowEl;
+}
+
+// Last "ERROR:" line of yt-dlp's stderr, without the prefix
+function errorSummary(err) {
+  const lines = (err || '').split('\n').filter(Boolean);
+  const line = lines.findLast(l => l.startsWith('ERROR:')) || lines[lines.length - 1] || 'Download failed';
+  return line.replace(/^ERROR:\s*/, '');
+}
+
+// Updates fields in place: rebuilding the row on every progress tick ate clicks and reloaded thumbnails
 function renderLedgerRow(task) {
   let rowEl = queueListEl.querySelector(`.ledger-row[data-id="${task.id}"]`);
 
-  // Filter check
-  const isActive = task.status === 'downloading' || task.status === 'processing' || task.status === 'queued';
-  if (appState.activeFilter === 'active' && !isActive) {
+  if (!matchesFilter(task)) {
     if (rowEl) rowEl.remove();
-    return;
+    syncEmptyState();
+    return null;
   }
-  if (appState.activeFilter === 'completed' && task.status !== 'completed') {
-    if (rowEl) rowEl.remove();
-    return;
-  }
-
-  emptyStateEl.style.display = 'none';
 
   if (!rowEl) {
-    rowEl = document.createElement('div');
-    rowEl.className = 'ledger-row';
-    rowEl.setAttribute('data-id', task.id);
+    rowEl = createRow(task);
     queueListEl.prepend(rowEl);
   }
+  const $ = sel => rowEl.querySelector(sel);
 
-  const isAudio = task.formatType === 'audio';
-  const specText = isAudio ? task.audioFormat.toUpperCase() : task.quality.toUpperCase();
-  const speedText = task.speed ? `${task.speed}` : '';
-  const etaText = task.eta ? `ETA ${task.eta}` : '';
-  const sizeText = resolveSizeMetrics(task);
-  const displayTitle = resolveTitle(task);
+  if (task.thumbnail && rowEl.dataset.thumb !== task.thumbnail) {
+    rowEl.dataset.thumb = task.thumbnail;
+    const img = new Image();
+    img.alt = '';
+    img.src = task.thumbnail; // set as a property: the URL is site-controlled
+    $('.row-thumb').replaceChildren(img);
+  }
+
+  const title = resolveTitle(task);
+  $('.row-title').textContent = title;
+  $('.row-title').title = `${title} • ${task.url || ''}`;
+  $('.tag-spec').textContent = ((task.formatType === 'audio' ? task.audioFormat : task.quality) || '').toUpperCase();
+  $('.tag-status').className = `tag-status ${task.status}`;
+  $('.tag-status').textContent = task.status;
+
   const progressPct = Math.min(100, Math.max(0, task.progress || 0));
+  $('.row-progress-bar').style.width = `${progressPct}%`;
+  $('.row-progress-bar').className = `row-progress-bar ${task.status === 'completed' || task.status === 'error' ? task.status : ''}`;
 
-  rowEl.innerHTML = `
-    <div class="row-thumb">
-      ${task.thumbnail ? `<img src="${task.thumbnail}" alt="preview" />` : `
-        <div class="row-thumb-icon">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75">
-            ${isAudio ? '<path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />' : '<polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>'}
-          </svg>
-        </div>
-      `}
-    </div>
+  const isError = task.status === 'error';
+  rowEl.classList.toggle('is-error', isError);
+  $('.row-log').textContent = isError ? errorSummary(task.error) : (task.log || 'Waiting...');
+  $('.row-log').title = isError ? (task.error || '') : '';
 
-    <div class="row-main">
-      <div class="row-top">
-        <span class="row-title" title="${escapeXml(displayTitle)} • ${escapeXml(task.url || '')}">${escapeXml(displayTitle)}</span>
-        <div class="row-tags">
-          <span class="tag-spec">${specText}</span>
-          <span class="tag-status ${task.status}">${task.status}</span>
-        </div>
-      </div>
+  const metrics = [resolveSizeMetrics(task), task.speed, task.eta && `ETA ${task.eta}`, `${progressPct.toFixed(0)}%`];
+  $('.row-metrics').replaceChildren(...metrics.filter(Boolean).map(m => Object.assign(document.createElement('span'), { textContent: m })));
 
-      <div class="row-progress">
-        <div class="row-progress-bar ${task.status === 'completed' ? 'completed' : (task.status === 'error' ? 'error' : '')}" 
-             style="width: ${progressPct}%;"></div>
-      </div>
+  if (rowEl.dataset.status !== task.status) {
+    rowEl.dataset.status = task.status;
+    $('.row-actions').innerHTML = actionButtons(task.status);
+  }
 
-      <div class="row-bottom">
-        <span class="row-log">${escapeXml(task.log || (task.status === 'completed' ? 'Transfer complete' : 'Waiting...'))}</span>
-        <div class="row-metrics">
-          ${sizeText ? `<span>${sizeText}</span>` : ''}
-          ${speedText ? `<span>${speedText}</span>` : ''}
-          ${etaText ? `<span>${etaText}</span>` : ''}
-          <span>${progressPct.toFixed(0)}%</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="row-actions">
-      ${(task.status === 'downloading' || task.status === 'processing') ? `
-        <button class="btn-row-action danger" onclick="cancelTransfer('${task.id}')" title="Cancel Transfer">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      ` : ''}
-
-      ${task.status === 'completed' ? `
-        <button class="btn-row-action success" onclick="playMedia('${task.id}')" title="Play Media File">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>
-        </button>
-        <button class="btn-row-action" onclick="revealMedia('${task.id}')" title="Reveal in File Manager">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
-          </svg>
-        </button>
-      ` : ''}
-
-      ${(task.status === 'completed' || task.status === 'error' || task.status === 'cancelled') ? `
-        <button class="btn-row-action" onclick="dismissTransfer('${task.id}')" title="Dismiss from ledger">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-          </svg>
-        </button>
-      ` : ''}
-    </div>
-  `;
+  syncEmptyState();
+  return rowEl;
 }
 
-// Window functions
-window.cancelTransfer = async function(id) {
-  try {
-    await window.go.main.App.CancelDownload(id);
-  } catch (err) {
-    showNotice(err.message || 'Cancel failed', 'error');
-  }
-};
+function syncEmptyState() {
+  emptyStateEl.style.display = queueListEl.querySelector('.ledger-row') ? 'none' : 'flex';
+}
 
-window.playMedia = async function(id) {
-  const task = appState.tasks[id];
-  if (!task || !task.outputFile) {
-    showNotice('Output file not located', 'error');
-    return;
-  }
-  try {
-    await window.go.main.App.OpenFile(task.outputFile);
-  } catch (err) {
-    showNotice(err.message || 'Cannot launch media player', 'error');
-  }
-};
+// Row actions (one delegated listener, survives row updates)
+queueListEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (btn) rowActions[btn.dataset.action](btn.closest('.ledger-row').dataset.id);
+});
 
-window.revealMedia = async function(id) {
-  const task = appState.tasks[id];
-  const targetDir = (task && task.saveDir) ? task.saveDir : appState.saveDir;
-  try {
-    await window.go.main.App.OpenFolder(targetDir);
-  } catch (err) {
-    showNotice('Failed to open directory', 'error');
-  }
-};
+const rowActions = {
+  async cancel(id) {
+    try {
+      await window.go.main.App.CancelDownload(id);
+    } catch (err) {
+      showNotice(err.message || 'Cancel failed', 'error');
+    }
+  },
 
-window.dismissTransfer = async function(id) {
-  try {
-    await window.go.main.App.RemoveDownload(id);
-    delete appState.tasks[id];
-    renderLedger();
-  } catch (err) {
-    console.error(err);
+  async play(id) {
+    const task = appState.tasks[id];
+    if (!task || !task.outputFile) {
+      showNotice('Output file not located', 'error');
+      return;
+    }
+    try {
+      await window.go.main.App.OpenFile(task.outputFile);
+    } catch (err) {
+      showNotice(err.message || 'Cannot launch media player', 'error');
+    }
+  },
+
+  async reveal(id) {
+    const task = appState.tasks[id];
+    const targetDir = (task && task.saveDir) ? task.saveDir : appState.saveDir;
+    try {
+      await window.go.main.App.OpenFolder(targetDir);
+    } catch (err) {
+      showNotice('Failed to open directory', 'error');
+    }
+  },
+
+  async retry(id) {
+    const old = appState.tasks[id];
+    if (!old || !old.options) return;
+    try {
+      const task = await window.go.main.App.AddDownload(old.options);
+      await window.go.main.App.RemoveDownload(id);
+      delete appState.tasks[id];
+      appState.tasks[task.id] = task;
+      renderLedger();
+    } catch (err) {
+      showNotice(err.message || 'Retry failed', 'error');
+    }
+  },
+
+  async dismiss(id) {
+    try {
+      await window.go.main.App.RemoveDownload(id);
+      delete appState.tasks[id];
+      renderLedger();
+    } catch (err) {
+      console.error(err);
+    }
   }
 };
 
@@ -625,23 +777,18 @@ window.dismissTransfer = async function(id) {
 function showNotice(text, type = 'info', duration = 3000) {
   const el = document.createElement('div');
   el.className = `toast-item ${type}`;
-  el.textContent = text;
+  const msg = Object.assign(document.createElement('span'), { className: 'toast-text', textContent: text });
+  const close = Object.assign(document.createElement('button'), { className: 'toast-close', title: 'Dismiss', textContent: '✕' });
+  el.append(msg, close);
   toastContainerEl.appendChild(el);
 
-  setTimeout(() => {
+  const dismiss = () => {
     el.style.opacity = '0';
     el.style.transform = 'translateY(4px)';
     el.style.transition = 'all 0.15s ease';
     setTimeout(() => el.remove(), 150);
-  }, duration);
-}
-
-function escapeXml(unsafe) {
-  if (!unsafe) return '';
-  return unsafe
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  };
+  close.addEventListener('click', dismiss);
+  // Errors stay until dismissed so they can be read and copied
+  if (type !== 'error') setTimeout(dismiss, duration);
 }

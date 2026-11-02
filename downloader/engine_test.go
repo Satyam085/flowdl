@@ -2,6 +2,9 @@ package downloader
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -66,12 +69,18 @@ func TestParseOutputLineTitleAndTotal(t *testing.T) {
 		URL:   "https://www.youtube.com/watch?v=sample123",
 	}
 
-	// Line with title in info and NA total, but valid progress and downloaded bytes
-	line := "download-meta: 50.0%|4.20MiB/s|00:20|NA|350.00MiB|Never Gonna Give You Up|https://img.yt.com/123.jpg|367001600|NA"
+	// Line with NA total but valid progress and downloaded bytes; title contains the separator
+	line := "download-meta: 50.0%|4.20MiB/s|00:20|NA|350.00MiB|https://img.yt.com/123.jpg|367001600|NA|4404019.2|3|20|Never Gonna | Give You Up"
 	engine.parseOutputLine(task, line)
 
-	if task.Title != "Never Gonna Give You Up" {
-		t.Errorf("expected Title to update to 'Never Gonna Give You Up', got %q", task.Title)
+	if task.Title != "Never Gonna | Give You Up" {
+		t.Errorf("expected Title 'Never Gonna | Give You Up', got %q", task.Title)
+	}
+	if task.SpeedBytes != 4404019.2 {
+		t.Errorf("expected SpeedBytes 4404019.2, got %v", task.SpeedBytes)
+	}
+	if task.Log != "Downloading item 3/20" {
+		t.Errorf("expected playlist position in Log, got %q", task.Log)
 	}
 	if task.Thumbnail != "https://img.yt.com/123.jpg" {
 		t.Errorf("expected Thumbnail to update, got %q", task.Thumbnail)
@@ -143,9 +152,68 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestCachedInfoJSON(t *testing.T) {
+	f, err := os.CreateTemp("", "flowdl-*.info.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+
+	if got := cachedInfoJSON(f.Name()); got != f.Name() {
+		t.Errorf("expected own temp file accepted, got %q", got)
+	}
+	outside := filepath.Join(t.TempDir(), "flowdl-x.info.json")
+	os.WriteFile(outside, nil, 0o600)
+	for _, p := range []string{"", outside, "/etc/passwd", filepath.Join(os.TempDir(), "flowdl-missing.info.json")} {
+		if got := cachedInfoJSON(p); got != "" {
+			t.Errorf("cachedInfoJSON(%q) = %q, want rejected", p, got)
+		}
+	}
+}
+
+func TestQueueLimitAndCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake yt-dlp")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "yt-dlp"), []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	engine := NewEngine(nil)
+	var ids []string
+	for range maxConcurrent + 2 {
+		task, _ := engine.CreateTask(DownloadOptions{URL: "https://example.com/v", SaveDir: dir})
+		ids = append(ids, task.ID)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	counts := map[string]int{}
+	for _, task := range engine.GetAllTasks() {
+		counts[task.Status]++
+	}
+	if counts["downloading"] != maxConcurrent || counts["queued"] != 2 {
+		t.Fatalf("want %d downloading + 2 queued, got %v", maxConcurrent, counts)
+	}
+
+	for _, id := range ids {
+		engine.CancelTask(id)
+	}
+	// A slot frees only after yt-dlp and its children (here: sleep) die and the pipes close
+	deadline := time.Now().Add(3 * time.Second)
+	for len(engine.slots) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("slots not released: process group was not killed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestFetchMediaInfoValidation(t *testing.T) {
 	ctx := context.Background()
-	_, err := FetchMediaInfo(ctx, "   ")
+	_, err := FetchMediaInfo(ctx, "   ", false)
 	if err == nil {
 		t.Errorf("expected error on empty URL, got nil")
 	}

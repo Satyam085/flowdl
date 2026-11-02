@@ -10,7 +10,7 @@ export function CancelDownload(arg1:string):Promise<void>;
 
 export function ClearFinishedDownloads():Promise<void>;
 
-export function FetchInfo(arg1:string):Promise<downloader.MediaInfo>;
+export function FetchInfo(arg1:string,arg2:boolean):Promise<downloader.MediaInfo>;
 
 export function GetDefaultSaveDir():Promise<string>;
 
@@ -18,10 +18,14 @@ export function GetDependencyStatus():Promise<downloader.DependencyStatus>;
 
 export function GetDownloads():Promise<Array<downloader.DownloadTask>>;
 
+export function LoadPrefs():Promise<string>;
+
 export function OpenFile(arg1:string):Promise<void>;
 
 export function OpenFolder(arg1:string):Promise<void>;
 
 export function RemoveDownload(arg1:string):Promise<void>;
+
+export function SavePrefs(arg1:string):Promise<void>;
 
 export function SelectDirectory(arg1:string):Promise<string>;

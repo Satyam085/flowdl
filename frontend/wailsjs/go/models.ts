@@ -30,6 +30,7 @@ export namespace downloader {
 	    embedMetadata: boolean;
 	    customFilename: string;
 	    downloadPlaylist: boolean;
+	    infoJsonPath: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DownloadOptions(source);
@@ -48,6 +49,7 @@ export namespace downloader {
 	        this.embedMetadata = source["embedMetadata"];
 	        this.customFilename = source["customFilename"];
 	        this.downloadPlaylist = source["downloadPlaylist"];
+	        this.infoJsonPath = source["infoJsonPath"];
 	    }
 	}
 	export class DownloadTask {
@@ -65,6 +67,7 @@ export namespace downloader {
 	    status: string;
 	    progress: number;
 	    speed: string;
+	    speedBytes: number;
 	    eta: string;
 	    downloadedBytes: string;
 	    totalBytes: string;
@@ -74,6 +77,7 @@ export namespace downloader {
 	    createdAt: any;
 	    // Go type: time
 	    finishedAt?: any;
+	    options: DownloadOptions;
 	
 	    static createFrom(source: any = {}) {
 	        return new DownloadTask(source);
@@ -95,6 +99,7 @@ export namespace downloader {
 	        this.status = source["status"];
 	        this.progress = source["progress"];
 	        this.speed = source["speed"];
+	        this.speedBytes = source["speedBytes"];
 	        this.eta = source["eta"];
 	        this.downloadedBytes = source["downloadedBytes"];
 	        this.totalBytes = source["totalBytes"];
@@ -102,6 +107,7 @@ export namespace downloader {
 	        this.error = source["error"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.finishedAt = this.convertValues(source["finishedAt"], null);
+	        this.options = this.convertValues(source["options"], DownloadOptions);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -133,6 +139,7 @@ export namespace downloader {
 	    isPlaylist: boolean;
 	    playlistCount: number;
 	    availableResolutions: string[];
+	    infoJsonPath: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MediaInfo(source);
@@ -150,6 +157,7 @@ export namespace downloader {
 	        this.isPlaylist = source["isPlaylist"];
 	        this.playlistCount = source["playlistCount"];
 	        this.availableResolutions = source["availableResolutions"];
+	        this.infoJsonPath = source["infoJsonPath"];
 	    }
 	}
 

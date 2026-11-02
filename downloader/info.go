@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,13 +27,13 @@ type rawMediaJSON struct {
 		Title string `json:"title"`
 	} `json:"entries"`
 	Formats []struct {
-		FormatID   string  `json:"format_id"`
-		Resolution string  `json:"resolution"`
-		Height     int     `json:"height"`
-		VCodec     string  `json:"vcodec"`
-		ACodec     string  `json:"acodec"`
-		Filesize   int64   `json:"filesize"`
-		FilesizeAp int64   `json:"filesize_approx"`
+		FormatID   string `json:"format_id"`
+		Resolution string `json:"resolution"`
+		Height     int    `json:"height"`
+		VCodec     string `json:"vcodec"`
+		ACodec     string `json:"acodec"`
+		Filesize   int64  `json:"filesize"`
+		FilesizeAp int64  `json:"filesize_approx"`
 	} `json:"formats"`
 }
 
@@ -49,8 +51,9 @@ func FormatDuration(seconds int) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
-// FetchMediaInfo retrieves video or playlist metadata via yt-dlp --dump-single-json
-func FetchMediaInfo(ctx context.Context, mediaURL string) (*MediaInfo, error) {
+// FetchMediaInfo retrieves video or playlist metadata via yt-dlp --dump-single-json.
+// With playlist false, a video URL that also names a playlist is inspected as the video alone.
+func FetchMediaInfo(ctx context.Context, mediaURL string, playlist bool) (*MediaInfo, error) {
 	mediaURL = strings.TrimSpace(mediaURL)
 	if mediaURL == "" {
 		return nil, fmt.Errorf("URL cannot be empty")
@@ -63,6 +66,10 @@ func FetchMediaInfo(ctx context.Context, mediaURL string) (*MediaInfo, error) {
 		"--dump-single-json",
 		"--no-warnings",
 		"--skip-download",
+		"--flat-playlist", // list entries without resolving each one
+	}
+	if !playlist {
+		args = append(args, "--no-playlist")
 	}
 
 	// Try using node if available in PATH or common paths to assist JS challenges
@@ -129,6 +136,14 @@ func FetchMediaInfo(ctx context.Context, mediaURL string) (*MediaInfo, error) {
 		resList = append(resList, strconv.Itoa(h)+"p")
 	}
 	info.AvailableResolutions = resList
+
+	// Cache the extraction so the download can skip it (flat playlist JSON would only list entries)
+	if !info.IsPlaylist {
+		path := filepath.Join(os.TempDir(), "flowdl-"+generateID()+".info.json")
+		if os.WriteFile(path, stdout.Bytes(), 0o600) == nil {
+			info.InfoJSONPath = path
+		}
+	}
 
 	return info, nil
 }

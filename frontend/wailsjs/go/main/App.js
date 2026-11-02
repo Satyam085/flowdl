@@ -18,8 +18,8 @@ export function ClearFinishedDownloads() {
   return window['go']['main']['App']['ClearFinishedDownloads']();
 }
 
-export function FetchInfo(arg1) {
-  return window['go']['main']['App']['FetchInfo'](arg1);
+export function FetchInfo(arg1, arg2) {
+  return window['go']['main']['App']['FetchInfo'](arg1, arg2);
 }
 
 export function GetDefaultSaveDir() {
@@ -34,6 +34,10 @@ export function GetDownloads() {
   return window['go']['main']['App']['GetDownloads']();
 }
 
+export function LoadPrefs() {
+  return window['go']['main']['App']['LoadPrefs']();
+}
+
 export function OpenFile(arg1) {
   return window['go']['main']['App']['OpenFile'](arg1);
 }
@@ -44,6 +48,10 @@ export function OpenFolder(arg1) {
 
 export function RemoveDownload(arg1) {
   return window['go']['main']['App']['RemoveDownload'](arg1);
+}
+
+export function SavePrefs(arg1) {
+  return window['go']['main']['App']['SavePrefs'](arg1);
 }
 
 export function SelectDirectory(arg1) {

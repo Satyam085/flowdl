@@ -16,6 +16,7 @@ type MediaInfo struct {
 	IsPlaylist           bool     `json:"isPlaylist"`
 	PlaylistCount        int      `json:"playlistCount"`
 	AvailableResolutions []string `json:"availableResolutions"`
+	InfoJSONPath         string   `json:"infoJsonPath"` // cached --dump-single-json output, single videos only
 }
 
 // DownloadOptions defines configuration for a download task
@@ -31,31 +32,34 @@ type DownloadOptions struct {
 	EmbedMetadata    bool   `json:"embedMetadata"`    // embed tags, chapter markers
 	CustomFilename   string `json:"customFilename"`   // custom template or prefix
 	DownloadPlaylist bool   `json:"downloadPlaylist"` // whether to download entire playlist if URL is playlist
+	InfoJSONPath     string `json:"infoJsonPath"`     // from MediaInfo; skips re-extraction via --load-info-json
 }
 
 // DownloadTask represents an active, completed, or failed download
 type DownloadTask struct {
-	ID              string     `json:"id"`
-	URL             string     `json:"url"`
-	Title           string     `json:"title"`
-	Uploader        string     `json:"uploader"`
-	Thumbnail       string     `json:"thumbnail"`
-	DurationStr     string     `json:"durationStr"`
-	SaveDir         string     `json:"saveDir"`
-	OutputFile      string     `json:"outputFile"`
-	Quality         string     `json:"quality"`
-	FormatType      string     `json:"formatType"`
-	AudioFormat     string     `json:"audioFormat"`
-	Status          string     `json:"status"` // "queued", "fetching", "downloading", "processing", "completed", "error", "cancelled"
-	Progress        float64    `json:"progress"`
-	Speed           string     `json:"speed"`
-	ETA             string     `json:"eta"`
-	DownloadedBytes string     `json:"downloadedBytes"`
-	TotalBytes      string     `json:"totalBytes"`
-	Log             string     `json:"log"`
-	Error           string     `json:"error,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+	ID              string          `json:"id"`
+	URL             string          `json:"url"`
+	Title           string          `json:"title"`
+	Uploader        string          `json:"uploader"`
+	Thumbnail       string          `json:"thumbnail"`
+	DurationStr     string          `json:"durationStr"`
+	SaveDir         string          `json:"saveDir"`
+	OutputFile      string          `json:"outputFile"`
+	Quality         string          `json:"quality"`
+	FormatType      string          `json:"formatType"`
+	AudioFormat     string          `json:"audioFormat"`
+	Status          string          `json:"status"` // "queued", "fetching", "downloading", "processing", "completed", "error", "cancelled"
+	Progress        float64         `json:"progress"`
+	Speed           string          `json:"speed"`
+	SpeedBytes      float64         `json:"speedBytes"` // raw bytes/s, for summing across tasks
+	ETA             string          `json:"eta"`
+	DownloadedBytes string          `json:"downloadedBytes"`
+	TotalBytes      string          `json:"totalBytes"`
+	Log             string          `json:"log"`
+	Error           string          `json:"error,omitempty"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
+	Options         DownloadOptions `json:"options"` // original request, used for retry
 }
 
 // DependencyStatus reports whether system tools are detected

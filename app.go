@@ -33,8 +33,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // FetchInfo inspects metadata for a given URL
-func (a *App) FetchInfo(mediaURL string) (*downloader.MediaInfo, error) {
-	return downloader.FetchMediaInfo(a.ctx, mediaURL)
+func (a *App) FetchInfo(mediaURL string, playlist bool) (*downloader.MediaInfo, error) {
+	return downloader.FetchMediaInfo(a.ctx, mediaURL, playlist)
 }
 
 // AddDownload starts a single download task
@@ -59,6 +59,7 @@ func (a *App) AddBatchDownloads(urls []string, baseOpts downloader.DownloadOptio
 		}
 		itemOpts := baseOpts
 		itemOpts.URL = u
+		itemOpts.InfoJSONPath = ""
 		task, err := a.engine.CreateTask(itemOpts)
 		if err == nil {
 			tasks = append(tasks, task)
@@ -145,6 +146,33 @@ func (a *App) OpenFile(filePath string) error {
 		return fmt.Errorf("file does not exist: %s", filePath)
 	}
 	return exec.Command("xdg-open", filePath).Start()
+}
+
+func prefsPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	return filepath.Join(dir, "flowdl", "prefs.json"), err
+}
+
+// LoadPrefs returns the saved UI preferences as JSON, or "" if none
+func (a *App) LoadPrefs() string {
+	p, err := prefsPath()
+	if err != nil {
+		return ""
+	}
+	b, _ := os.ReadFile(p)
+	return string(b)
+}
+
+// SavePrefs stores UI preferences JSON (the frontend owns the shape)
+func (a *App) SavePrefs(data string) error {
+	p, err := prefsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(data), 0o644)
 }
 
 // GetDependencyStatus checks yt-dlp and ffmpeg presence

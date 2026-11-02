@@ -22,6 +22,9 @@ var (
 	destRegex    = regexp.MustCompile(`\[(?:download|Merger|ExtractAudio)\]\s+(?:Destination:\s+|Merging formats into\s+"?)([^"\r\n]+)`)
 )
 
+// ponytail: fixed limit, make it a setting if users ask
+const maxConcurrent = 3
+
 func generateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
@@ -34,6 +37,7 @@ type Engine struct {
 	tasks      map[string]*DownloadTask
 	cancels    map[string]context.CancelFunc
 	onUpdate   func(task *DownloadTask)
+	slots      chan struct{} // limits concurrent yt-dlp processes
 	nodePath   string
 	defaultDir string
 }
@@ -51,6 +55,7 @@ func NewEngine(onUpdate func(task *DownloadTask)) *Engine {
 		tasks:      make(map[string]*DownloadTask),
 		cancels:    make(map[string]context.CancelFunc),
 		onUpdate:   onUpdate,
+		slots:      make(chan struct{}, maxConcurrent),
 		nodePath:   node,
 		defaultDir: dlDir,
 	}
@@ -112,8 +117,9 @@ func (e *Engine) CreateTask(opts DownloadOptions) (*DownloadTask, error) {
 		AudioFormat: audioFormat,
 		Status:      "queued",
 		Progress:    0,
-		Log:         "Waiting to start...",
+		Log:         "Waiting in queue...",
 		CreatedAt:   time.Now(),
+		Options:     opts,
 	}
 
 	e.tasks[task.ID] = task
@@ -197,6 +203,25 @@ func (e *Engine) notify(task *DownloadTask) {
 }
 
 func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts DownloadOptions) {
+	defer func() {
+		e.mu.Lock()
+		delete(e.cancels, task.ID)
+		e.mu.Unlock()
+	}()
+
+	infoJSON := cachedInfoJSON(opts.InfoJSONPath)
+	if infoJSON != "" {
+		defer os.Remove(infoJSON)
+	}
+
+	// Wait for a free slot; a cancel or remove while queued just drops the task
+	select {
+	case e.slots <- struct{}{}:
+		defer func() { <-e.slots }()
+	case <-ctx.Done():
+		return
+	}
+
 	e.mu.Lock()
 	if ctx.Err() != nil {
 		e.mu.Unlock()
@@ -207,12 +232,6 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 	e.mu.Unlock()
 	e.notify(task)
 
-	defer func() {
-		e.mu.Lock()
-		delete(e.cancels, task.ID)
-		e.mu.Unlock()
-	}()
-
 	// Ensure destination directory exists
 	if err := os.MkdirAll(task.SaveDir, 0755); err != nil {
 		e.finishError(task, fmt.Sprintf("Failed to create save directory: %v", err))
@@ -221,6 +240,8 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 
 	args := []string{
 		"--newline",
+		"--progress-delta", "0.5", // throttle progress lines; each one is a UI update
+		"--concurrent-fragments", "4", // parallel fragments for HLS/DASH streams
 		"-P", task.SaveDir,
 	}
 
@@ -274,18 +295,19 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 		args = append(args, "--js-runtimes", "node:"+e.nodePath)
 	}
 
-	// Structured progress template prefix with title, thumbnail, downloaded bytes, and total bytes
-	args = append(args, "--progress-template", "download-meta:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._total_bytes_str,progress._total_bytes_estimate_str,info.filesize_str,info.filesize_approx_str)s|%(progress._downloaded_bytes_str)s|%(info.title)s|%(info.thumbnail)s|%(progress.downloaded_bytes)s|%(progress.total_bytes,progress.total_bytes_estimate,info.filesize,info.filesize_approx)s")
+	// Structured progress line, parsed by parseOutputLine. Title stays last since it may contain "|".
+	args = append(args, "--progress-template", "download-meta:"+progressTemplate)
 
-	args = append(args, task.URL)
+	if infoJSON != "" {
+		// Reuses Inspect's extraction; yt-dlp falls back to webpage_url if the cached stream URLs fail
+		args = append(args, "--load-info-json", infoJSON)
+	} else {
+		args = append(args, task.URL)
+	}
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return cmd.Process.Kill()
-		}
-		return nil
-	}
+	setProcGroup(cmd)
+	cmd.Cancel = func() error { return killProcGroup(cmd) } // also kills ffmpeg children
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -314,6 +336,9 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 			if line != "" {
 				errMu.Lock()
 				stderrLines = append(stderrLines, line)
+				if len(stderrLines) > 50 {
+					stderrLines = stderrLines[1:]
+				}
 				errMu.Unlock()
 			}
 		}
@@ -360,6 +385,7 @@ func (e *Engine) runDownload(ctx context.Context, task *DownloadTask, opts Downl
 	task.Status = "completed"
 	task.Progress = 100
 	task.Speed = ""
+	task.SpeedBytes = 0
 	task.ETA = "Done"
 	task.Log = "Download finished successfully"
 	now := time.Now()
@@ -433,75 +459,84 @@ func parseHumanBytes(s string) float64 {
 	}
 }
 
+// progressTemplate fields, in order (see parseOutputLine):
+// 0 percent | 1 speed | 2 eta | 3 total str | 4 downloaded str | 5 thumbnail |
+// 6 downloaded raw | 7 total raw | 8 speed raw | 9 playlist index | 10 playlist count | 11 title
+const progressTemplate = "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|" +
+	"%(progress._total_bytes_str,progress._total_bytes_estimate_str,info.filesize_str,info.filesize_approx_str)s|" +
+	"%(progress._downloaded_bytes_str)s|%(info.thumbnail)s|%(progress.downloaded_bytes)s|" +
+	"%(progress.total_bytes,progress.total_bytes_estimate,info.filesize,info.filesize_approx)s|" +
+	"%(progress.speed)s|%(info.playlist_index)s|%(info.n_entries)s|%(info.title)s"
+
+const progressFields = 12
+
+// cachedInfoJSON returns p only if it is an info file written by FetchMediaInfo.
+// The path comes from the frontend, and the file gets deleted after use.
+func cachedInfoJSON(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	base := filepath.Base(p)
+	if filepath.Dir(p) != filepath.Clean(os.TempDir()) || !strings.HasPrefix(base, "flowdl-") || !strings.HasSuffix(base, ".info.json") {
+		return ""
+	}
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
 func (e *Engine) parseOutputLine(task *DownloadTask, line string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Check for structured progress template
-	if strings.HasPrefix(line, "download-meta:") {
-		content := strings.TrimPrefix(line, "download-meta:")
-		parts := strings.Split(content, "|")
-		if len(parts) >= 5 {
-			pctStr := strings.TrimSpace(parts[0])
-			pctClean := strings.TrimSuffix(pctStr, "%")
-			if pctVal, err := strconv.ParseFloat(pctClean, 64); err == nil {
-				task.Progress = pctVal
+	if content, ok := strings.CutPrefix(line, "download-meta:"); ok {
+		parts := strings.SplitN(content, "|", progressFields)
+		if len(parts) < progressFields {
+			return
+		}
+		field := func(i int) string {
+			v := strings.TrimSpace(parts[i])
+			if v == "NA" || v == "N/A" || v == "None" {
+				return ""
 			}
-			task.Speed = strings.TrimSpace(parts[1])
-			task.ETA = strings.TrimSpace(parts[2])
-			task.DownloadedBytes = strings.TrimSpace(parts[4])
-			task.Status = "downloading"
-			task.Log = fmt.Sprintf("Downloading... %s (%s)", task.Speed, task.ETA)
+			return v
+		}
 
-			// 1. Resolve human title from info dict if present
-			if len(parts) >= 6 {
-				titleFromInfo := strings.TrimSpace(parts[5])
-				if titleFromInfo != "" && titleFromInfo != "NA" && titleFromInfo != "None" {
-					task.Title = titleFromInfo
-				}
-			}
+		if pct, err := strconv.ParseFloat(strings.TrimSuffix(field(0), "%"), 64); err == nil {
+			task.Progress = pct
+		}
+		task.Speed = field(1)
+		task.ETA = field(2)
+		task.DownloadedBytes = field(4)
+		task.SpeedBytes, _ = strconv.ParseFloat(field(8), 64)
+		task.Status = "downloading"
+		task.Log = "Downloading..."
+		if idx, n := field(9), field(10); idx != "" && n != "" {
+			task.Log = "Downloading item " + idx + "/" + n
+		}
+		if title := field(11); title != "" {
+			task.Title = title
+		}
+		if thumb := field(5); thumb != "" && task.Thumbnail == "" {
+			task.Thumbnail = thumb
+		}
 
-			// 2. Resolve thumbnail from info dict
-			if len(parts) >= 7 {
-				thumbFromInfo := strings.TrimSpace(parts[6])
-				if thumbFromInfo != "" && thumbFromInfo != "NA" && thumbFromInfo != "None" && task.Thumbnail == "" {
-					task.Thumbnail = thumbFromInfo
-				}
+		// Total size: yt-dlp's string, raw bytes, or an estimate from progress
+		if total := field(3); total != "" {
+			task.TotalBytes = total
+		} else if raw, err := strconv.ParseFloat(field(7), 64); err == nil && raw > 0 {
+			task.TotalBytes = formatBytes(raw)
+		} else {
+			dl, _ := strconv.ParseFloat(field(6), 64)
+			if dl == 0 {
+				dl = parseHumanBytes(task.DownloadedBytes)
 			}
-
-			// 3. Resolve TotalBytes and prevent "NA"
-			rawDownloadedStr := ""
-			if len(parts) >= 8 {
-				rawDownloadedStr = strings.TrimSpace(parts[7])
-			}
-			rawTotalStr := ""
-			if len(parts) >= 9 {
-				rawTotalStr = strings.TrimSpace(parts[8])
-			}
-
-			formattedTotal := strings.TrimSpace(parts[3])
-			if formattedTotal != "" && formattedTotal != "NA" && formattedTotal != "N/A" && formattedTotal != "None" {
-				task.TotalBytes = formattedTotal
-			} else if rawTotalStr != "" && rawTotalStr != "NA" && rawTotalStr != "N/A" && rawTotalStr != "None" {
-				if totVal, err := strconv.ParseFloat(rawTotalStr, 64); err == nil && totVal > 0 {
-					task.TotalBytes = formatBytes(totVal)
-				}
+			if task.Progress > 0.5 && dl > 0 {
+				task.TotalBytes = "~" + formatBytes(dl/(task.Progress/100))
 			} else {
-				// Estimate total size mathematically from progress percentage and downloaded bytes
-				var dlBytes float64
-				if rawDownloadedStr != "" && rawDownloadedStr != "NA" && rawDownloadedStr != "None" {
-					dlBytes, _ = strconv.ParseFloat(rawDownloadedStr, 64)
-				}
-				if dlBytes == 0 && task.DownloadedBytes != "" {
-					dlBytes = parseHumanBytes(task.DownloadedBytes)
-				}
-
-				if task.Progress > 0.5 && dlBytes > 0 {
-					estTotal := dlBytes / (task.Progress / 100.0)
-					task.TotalBytes = "~" + formatBytes(estTotal)
-				} else {
-					task.TotalBytes = ""
-				}
+				task.TotalBytes = ""
 			}
 		}
 		e.notify(task)

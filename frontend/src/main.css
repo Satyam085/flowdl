@@ -58,6 +58,11 @@
   color: #ffffff;
 }
 
+button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
 ::-webkit-scrollbar {
   width: 7px;
   height: 7px;
@@ -173,6 +178,10 @@ body {
 
 .telemetry-dot.error {
   background-color: var(--status-error);
+}
+
+.telemetry-dot.warn {
+  background-color: var(--status-processing);
 }
 
 .topbar-right {
@@ -551,6 +560,11 @@ body {
   font-weight: 600;
 }
 
+.pill:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 /* Feature Flags */
 .options-flags {
   display: flex;
@@ -559,14 +573,25 @@ body {
 }
 
 .flag-check {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
 }
 
+/* Visually hidden but still focusable with Tab */
 .flag-check input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.flag-check input:focus-visible + .flag-box {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 
 .flag-box {
@@ -809,6 +834,11 @@ body {
   color: var(--status-error);
 }
 
+.tag-status.queued {
+  background: var(--status-idle-bg);
+  color: var(--text-secondary);
+}
+
 .tag-status.cancelled {
   background: var(--status-idle-bg);
   color: var(--status-idle);
@@ -853,6 +883,11 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 60%;
+}
+
+.ledger-row.is-error .row-log {
+  color: var(--status-error);
+  user-select: text;
 }
 
 .row-metrics {
@@ -989,11 +1024,33 @@ body {
   color: var(--text-primary);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   animation: toastIn 0.15s ease-out;
   min-width: 220px;
   max-width: 360px;
+}
+
+.toast-text {
+  flex: 1;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  color: var(--text-primary);
 }
 
 .toast-item.success {
