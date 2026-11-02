@@ -5,5 +5,8 @@
   "wailsjsdir": "./frontend",
   "author": {
     "name": "Satyam Singh"
+  },
+  "info": {
+    "productVersion": "1.1.0"
   }
 }

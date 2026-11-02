@@ -29,7 +29,10 @@ jobs:
           node-version: 20
 
       - name: Install NSIS
-        run: choco install nsis -y
+        run: |
+          choco install nsis -y
+          # choco doesn't put makensis on PATH for later steps; wails then silently skips the installer
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -43,6 +46,7 @@ jobs:
         run: |
           wails build -platform windows/amd64 -nsis
           Get-ChildItem build/bin/*installer*.exe | Rename-Item -NewName "FlowDL-Windows-x64-Setup.exe"
+          if (-not (Test-Path build/bin/FlowDL-Windows-x64-Setup.exe)) { throw "NSIS installer was not built" }
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
@@ -127,7 +131,8 @@ jobs:
     name: Publish GitHub Release
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    # Tags only: on a manual run the action would default the tag to the branch name ("main")
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
